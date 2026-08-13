@@ -1,0 +1,12 @@
+{
+  "name": "duemind",
+  "private": true,
+  "description": "DueMind - Reminds what's due, keeps your mind clear",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev:web": "npm run dev -w apps/web",
+    "dev:worker": "npm run dev -w apps/worker",
+    "build:web": "npm run build -w apps/web",
+    "deploy:worker": "npm run deploy -w apps/worker"
+  }
+}
