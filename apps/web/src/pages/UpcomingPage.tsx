@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Thing, ThingCard, getUrgency, getDaysUntil, formatDueDate, CATEGORY_ICONS, getUrgencyLabel } from '../types';
+import { Thing, getUrgency, getDaysUntil, formatDueDate, CATEGORY_ICONS, getUrgencyLabel } from '../types';
+import { ThingCard } from '../components/ThingCard';
 import { api } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
 import { Greeting } from '../components/Greeting';
