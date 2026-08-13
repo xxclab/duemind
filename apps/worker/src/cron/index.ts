@@ -1,5 +1,5 @@
 import { SupabaseClient } from '../lib/supabase';
-import { sendNotification } from './send';
+import { sendNotification } from '../notifications/send';
 
 export async function runCron(env: Env): Promise<{ processed: number; errors: number }> {
   const db = new SupabaseClient(env);
