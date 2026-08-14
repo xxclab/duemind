@@ -1,4 +1,4 @@
-import { verifyJwt } from '../lib/auth';
+import { verifyJwt } from './auth';
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -16,22 +16,11 @@ export async function withAuth(request: AuthenticatedRequest, env: Env): Promise
 
   const token = authHeader.slice(7);
   try {
-    // Verify token via Supabase auth.getUser()
-    // This delegates verification to Supabase itself
-    const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'apikey': env.SUPABASE_SERVICE_KEY,
-      },
-    });
-
-    if (!res.ok) return false;
-
-    const user = await res.json<{ id: string; email?: string; role?: string }>();
-    (request as AuthenticatedRequest).user = {
-      sub: user.id,
-      email: user.email,
-      role: user.role || 'authenticated',
+    const payload = await verifyJwt(token, env.SUPABASE_JWKS_URL);
+    request.user = {
+      sub: payload.sub,
+      email: payload.email,
+      role: payload.role,
     };
     return true;
   } catch {
@@ -45,7 +34,7 @@ export function jsonResponse(data: unknown, status = 200) {
     headers: {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     },
   });
