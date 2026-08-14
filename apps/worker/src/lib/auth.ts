@@ -1,7 +1,8 @@
-// JWT verification for Supabase Auth
-// Supports both HS256 (legacy symmetric) and ES256 (asymmetric via JWKS)
+// JWT verification using Supabase JWKS (ES256 asymmetric)
+// Local verification via Web Crypto API — no extra network call per request
+// (JWKS itself is fetched once per hour and cached)
 
-interface JwtPayload {
+export interface JwtPayload {
   sub: string;
   email?: string;
   role?: string;
@@ -12,24 +13,30 @@ interface JwtPayload {
 }
 
 const CACHE_DURATION = 3600_000; // 1 hour
-let cachedKey: JsonWebKey | null = null;
+
+let cachedJwk: JsonWebKey | null = null;
+let cachedKid: string | null = null;
 let cacheTimestamp = 0;
 
-async function getJwk(jwksUrl: string): Promise<JsonWebKey> {
+async function getJwk(jwksUrl: string, kid?: string): Promise<JsonWebKey> {
   const now = Date.now();
-  if (cachedKey && now - cacheTimestamp < CACHE_DURATION) {
-    return cachedKey;
+  if (cachedJwk && cachedKid === kid && now - cacheTimestamp < CACHE_DURATION) {
+    return cachedJwk;
   }
 
   const res = await fetch(jwksUrl);
   if (!res.ok) throw new Error('Failed to fetch JWKS');
 
-  const jwks = await res.json<{ keys: JsonWebKey[] }>();
+  const jwks = await res.json<{ keys: (JsonWebKey & { kid?: string })[] }>();
   if (!jwks.keys?.length) throw new Error('No keys in JWKS');
 
-  cachedKey = jwks.keys[0];
+  // Match by kid if present, else take the first key
+  const key = (kid && jwks.keys.find((k) => k.kid === kid)) || jwks.keys[0];
+
+  cachedJwk = key;
+  cachedKid = key.kid ?? null;
   cacheTimestamp = now;
-  return cachedKey;
+  return key;
 }
 
 function base64UrlDecode(str: string): Uint8Array {
@@ -43,17 +50,22 @@ function base64UrlDecode(str: string): Uint8Array {
   return bytes;
 }
 
-async function verifyEs256(
-  headerB64: string,
-  payloadB64: string,
-  signatureB64: string,
-  jwksUrl: string,
-): Promise<JwtPayload> {
-  const key = await getJwk(jwksUrl);
+export async function verifyJwt(token: string, jwksUrl: string): Promise<JwtPayload> {
+  const parts = token.split('.');
+  if (parts.length !== 3) throw new Error('Invalid JWT format');
+
+  const [headerB64, payloadB64, signatureB64] = parts;
+  const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headerB64)));
+
+  if (header.alg !== 'ES256') {
+    throw new Error(`Unsupported algorithm: ${header.alg}. Ask user to log out and log in again.`);
+  }
+
+  const jwk = await getJwk(jwksUrl, header.kid);
 
   const cryptoKey = await crypto.subtle.importKey(
     'jwk',
-    key,
+    jwk,
     { name: 'ECDSA', hash: 'SHA-256' },
     false,
     ['verify'],
@@ -65,56 +77,10 @@ async function verifyEs256(
   const valid = await crypto.subtle.verify('ECDSA', cryptoKey, signature, data);
   if (!valid) throw new Error('Invalid JWT signature');
 
-  return JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
-}
-
-async function verifyHs256(
-  headerB64: string,
-  payloadB64: string,
-  signatureB64: string,
-  jwtSecret: string,
-): Promise<JwtPayload> {
-  const keyData = new TextEncoder().encode(jwtSecret);
-
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    keyData,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['verify'],
+  const payload: JwtPayload = JSON.parse(
+    new TextDecoder().decode(base64UrlDecode(payloadB64)),
   );
-
-  const data = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
-  const signature = base64UrlDecode(signatureB64);
-
-  const valid = await crypto.subtle.verify('HMAC', cryptoKey, signature, data);
-  if (!valid) throw new Error('Invalid JWT signature');
-
-  return JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
-}
-
-export async function verifyJwt(
-  token: string,
-  jwksUrl: string,
-  jwtSecret?: string,
-): Promise<JwtPayload> {
-  const parts = token.split('.');
-  if (parts.length !== 3) throw new Error('Invalid JWT format');
-
-  const [headerB64, payloadB64, signatureB64] = parts;
-  const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headerB64)));
-
-  let payload: JwtPayload;
-
-  if (header.alg === 'ES256') {
-    payload = await verifyEs256(headerB64, payloadB64, signatureB64, jwksUrl);
-  } else if (header.alg === 'HS256') {
-    if (!jwtSecret) throw new Error('HS256 token but no JWT_SECRET configured');
-    payload = await verifyHs256(headerB64, payloadB64, signatureB64, jwtSecret);
-  } else {
-    throw new Error(`Unsupported algorithm: ${header.alg}`);
-  }
-
   if (payload.exp * 1000 < Date.now()) throw new Error('JWT expired');
+
   return payload;
 }
