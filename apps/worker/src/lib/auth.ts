@@ -1,4 +1,4 @@
-// JWT verification using Supabase JWKS
+// JWT verification using Supabase JWKS (ES256 asymmetric)
 // Uses the Web Crypto API available in Cloudflare Workers
 
 interface JwtPayload {
@@ -12,13 +12,13 @@ interface JwtPayload {
 }
 
 const CACHE_DURATION = 3600_000; // 1 hour
-let cachedKeys: JsonWebKey[] | null = null;
+let cachedKey: JsonWebKey | null = null;
 let cacheTimestamp = 0;
 
-async function getJwks(jwksUrl: string): Promise<JsonWebKey[]> {
+async function getJwk(jwksUrl: string): Promise<JsonWebKey> {
   const now = Date.now();
-  if (cachedKeys && now - cacheTimestamp < CACHE_DURATION) {
-    return cachedKeys;
+  if (cachedKey && now - cacheTimestamp < CACHE_DURATION) {
+    return cachedKey;
   }
 
   const res = await fetch(jwksUrl);
@@ -27,15 +27,13 @@ async function getJwks(jwksUrl: string): Promise<JsonWebKey[]> {
   const jwks = await res.json<{ keys: JsonWebKey[] }>();
   if (!jwks.keys?.length) throw new Error('No keys in JWKS');
 
-  cachedKeys = jwks.keys;
+  cachedKey = jwks.keys[0];
   cacheTimestamp = now;
-  return cachedKeys;
+  return cachedKey;
 }
 
 function base64UrlDecode(str: string): Uint8Array {
-  // Replace URL-safe characters
   let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
-  // Pad with '='
   while (base64.length % 4 !== 0) base64 += '=';
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -54,27 +52,16 @@ export async function verifyJwt(token: string, jwksUrl: string): Promise<JwtPayl
   const signatureB64 = parts[2];
 
   const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headerB64)));
-  if (!header.alg || !header.kid) throw new Error('Missing alg or kid');
+  if (!header.alg) throw new Error('Missing alg');
 
-  // Verify algorithm
-  if (header.alg !== 'RS256' && header.alg !== 'ES256') {
-    throw new Error(`Unsupported algorithm: ${header.alg}`);
-  }
-
-  const keys = await getJwks(jwksUrl);
-  const key = keys.find(k => k.kid === header.kid);
-  if (!key) throw new Error(`Key not found: ${header.kid}`);
+  // Fetch the JWK
+  const key = await getJwk(jwksUrl);
 
   // Import the key for verification
-  const algorithm: AlgorithmIdentifier = {
-    name: header.alg === 'RS256' ? 'RSASSA-PKCS1-v1_5' : 'ECDSA',
-    hash: 'SHA-256',
-  };
-
   const cryptoKey = await crypto.subtle.importKey(
     'jwk',
     key,
-    algorithm,
+    { name: 'ECDSA', hash: 'SHA-256' },
     false,
     ['verify']
   );
@@ -84,7 +71,7 @@ export async function verifyJwt(token: string, jwksUrl: string): Promise<JwtPayl
   const signature = base64UrlDecode(signatureB64);
 
   const valid = await crypto.subtle.verify(
-    algorithm,
+    'ECDSA',
     cryptoKey,
     signature,
     data
