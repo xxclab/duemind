@@ -155,7 +155,8 @@ export class SupabaseClient {
 
   async upsertProfile(userId: string, email: string, fields?: Record<string, unknown>) {
     return this.request('profiles', 'POST', {
-      body: { id: userId, email, ...fields },
+      // password_hash is NOT NULL in prod schema; OAuth users have no password
+      body: { id: userId, email, password_hash: 'oauth', ...fields },
       single: true,
       headers: { Prefer: 'return=representation,resolution=merge-duplicates' },
     });
