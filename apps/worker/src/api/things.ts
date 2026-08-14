@@ -162,7 +162,8 @@ async function handle(fn: () => Promise<unknown>) {
     const data = await fn();
     return jsonResponse(data);
   } catch (e) {
-    const message = e instanceof Error ? e.message : 'Unknown error';
+    const message =
+      e instanceof Error ? e.message : ((e as { message?: string })?.message ?? 'Unknown error');
     return errorResponse(message, 500);
   }
 }
