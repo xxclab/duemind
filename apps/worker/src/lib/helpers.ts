@@ -16,11 +16,22 @@ export async function withAuth(request: AuthenticatedRequest, env: Env): Promise
 
   const token = authHeader.slice(7);
   try {
-    const payload = await verifyJwt(token, env.SUPABASE_JWKS_URL);
+    // Verify token via Supabase auth.getUser()
+    // This delegates verification to Supabase itself
+    const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'apikey': env.SUPABASE_SERVICE_KEY,
+      },
+    });
+
+    if (!res.ok) return false;
+
+    const user = await res.json<{ id: string; email?: string; role?: string }>();
     (request as AuthenticatedRequest).user = {
-      sub: payload.sub,
-      email: payload.email,
-      role: payload.role,
+      sub: user.id,
+      email: user.email,
+      role: user.role || 'authenticated',
     };
     return true;
   } catch {
