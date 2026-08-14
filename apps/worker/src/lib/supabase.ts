@@ -30,6 +30,11 @@ export class SupabaseClient {
       ...options?.headers,
     };
 
+    // single=true → PostgREST returns one JSON object instead of an array
+    if (options?.single) {
+      headers['Accept'] = 'application/vnd.pgrst.object+json';
+    }
+
     if (options?.count) {
       headers['Prefer'] += `,count=${options.count}`;
     }
