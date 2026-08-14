@@ -50,6 +50,27 @@ function base64UrlDecode(str: string): Uint8Array {
   return bytes;
 }
 
+// JWT ES256 signatures are raw r||s (64 bytes) — Web Crypto expects ASN.1 DER
+function rawSignatureToDer(raw: Uint8Array): Uint8Array {
+  const toDerInt = (bytes: Uint8Array): number[] => {
+    let i = 0;
+    while (i < bytes.length - 1 && bytes[i] === 0) i++; // strip leading zeros
+    const out = Array.from(bytes.slice(i));
+    if (out[0] & 0x80) out.unshift(0); // keep integer positive
+    return out;
+  };
+
+  const rInt = toDerInt(raw.slice(0, 32));
+  const sInt = toDerInt(raw.slice(32, 64));
+
+  const total = 2 + rInt.length + 2 + sInt.length;
+  return new Uint8Array([
+    0x30, total,
+    0x02, rInt.length, ...rInt,
+    0x02, sInt.length, ...sInt,
+  ]);
+}
+
 export async function verifyJwt(token: string, jwksUrl: string): Promise<JwtPayload> {
   const parts = token.split('.');
   if (parts.length !== 3) throw new Error('Invalid JWT format');
@@ -72,7 +93,7 @@ export async function verifyJwt(token: string, jwksUrl: string): Promise<JwtPayl
   );
 
   const data = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
-  const signature = base64UrlDecode(signatureB64);
+  const signature = rawSignatureToDer(base64UrlDecode(signatureB64));
 
   const valid = await crypto.subtle.verify('ECDSA', cryptoKey, signature, data);
   if (!valid) throw new Error('Invalid JWT signature');
