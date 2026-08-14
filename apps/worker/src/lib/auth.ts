@@ -1,5 +1,5 @@
-// JWT verification using Supabase JWKS (ES256 asymmetric)
-// Uses the Web Crypto API available in Cloudflare Workers
+// JWT verification for Supabase Auth
+// Supports both HS256 (legacy symmetric) and ES256 (asymmetric via JWKS)
 
 interface JwtPayload {
   sub: string;
@@ -43,45 +43,78 @@ function base64UrlDecode(str: string): Uint8Array {
   return bytes;
 }
 
-export async function verifyJwt(token: string, jwksUrl: string): Promise<JwtPayload> {
-  const parts = token.split('.');
-  if (parts.length !== 3) throw new Error('Invalid JWT format');
-
-  const headerB64 = parts[0];
-  const payloadB64 = parts[1];
-  const signatureB64 = parts[2];
-
-  const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headerB64)));
-  if (!header.alg) throw new Error('Missing alg');
-
-  // Fetch the JWK
+async function verifyEs256(
+  headerB64: string,
+  payloadB64: string,
+  signatureB64: string,
+  jwksUrl: string,
+): Promise<JwtPayload> {
   const key = await getJwk(jwksUrl);
 
-  // Import the key for verification
   const cryptoKey = await crypto.subtle.importKey(
     'jwk',
     key,
     { name: 'ECDSA', hash: 'SHA-256' },
     false,
-    ['verify']
+    ['verify'],
   );
 
-  // Verify signature
   const data = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
   const signature = base64UrlDecode(signatureB64);
 
-  const valid = await crypto.subtle.verify(
-    'ECDSA',
-    cryptoKey,
-    signature,
-    data
-  );
-
+  const valid = await crypto.subtle.verify('ECDSA', cryptoKey, signature, data);
   if (!valid) throw new Error('Invalid JWT signature');
 
-  // Check expiration
-  const payload: JwtPayload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
-  if (payload.exp * 1000 < Date.now()) throw new Error('JWT expired');
+  return JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
+}
 
+async function verifyHs256(
+  headerB64: string,
+  payloadB64: string,
+  signatureB64: string,
+  jwtSecret: string,
+): Promise<JwtPayload> {
+  const keyData = new TextEncoder().encode(jwtSecret);
+
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    keyData,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+
+  const data = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+  const signature = base64UrlDecode(signatureB64);
+
+  const valid = await crypto.subtle.verify('HMAC', cryptoKey, signature, data);
+  if (!valid) throw new Error('Invalid JWT signature');
+
+  return JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
+}
+
+export async function verifyJwt(
+  token: string,
+  jwksUrl: string,
+  jwtSecret?: string,
+): Promise<JwtPayload> {
+  const parts = token.split('.');
+  if (parts.length !== 3) throw new Error('Invalid JWT format');
+
+  const [headerB64, payloadB64, signatureB64] = parts;
+  const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headerB64)));
+
+  let payload: JwtPayload;
+
+  if (header.alg === 'ES256') {
+    payload = await verifyEs256(headerB64, payloadB64, signatureB64, jwksUrl);
+  } else if (header.alg === 'HS256') {
+    if (!jwtSecret) throw new Error('HS256 token but no JWT_SECRET configured');
+    payload = await verifyHs256(headerB64, payloadB64, signatureB64, jwtSecret);
+  } else {
+    throw new Error(`Unsupported algorithm: ${header.alg}`);
+  }
+
+  if (payload.exp * 1000 < Date.now()) throw new Error('JWT expired');
   return payload;
 }
